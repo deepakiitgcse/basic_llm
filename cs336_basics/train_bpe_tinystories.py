@@ -1,6 +1,6 @@
 '''Module providing functions to import the Path.'''
 from pathlib import Path
-from bpe_tokenizer import BPETokenizer
+from .bpe_tokenizer import BPETokenizer
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
