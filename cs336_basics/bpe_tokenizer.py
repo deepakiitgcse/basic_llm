@@ -1,7 +1,10 @@
 # import re
+from collections import Counter
+import multiprocessing
 import pickle
 import time
 import regex as re
+from .pretokenization_example import find_chunk_boundaries
 
 GPT_PRE_TOKENIZER_REGEX = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -16,8 +19,11 @@ class BPETokenizer:
     def __init__(self) -> None:
         self._vocabulary: dict[int, bytes] = {}
         self._frequency_count: dict[tuple[bytes, ...], int] = {}
+        # All pair of bytes with their frequencies. These pairs will be updated
+        # with each merge step.
+        self._pair_count: dict[tuple[bytes, bytes], int] = {}
         self._token_id = 0
-        self._bpe_merges: list[tuple[bytes, bytes]] = list()
+        self._bpe_merges: list[tuple[bytes, bytes]] = []
         self._start_time = None
         self._end_time = None
 
@@ -43,26 +49,37 @@ class BPETokenizer:
         """Convert the string to a tuple of bytes in utf-8 encoding."""
         return tuple(bytes([b]) for b in word.encode("utf-8"))
 
-    def pre_tokenization(self, document_list: list[str]):
+    def pre_tokenization(self, document_list: list[str]) -> dict[tuple[bytes, ...], int]:
         """Does pre tokenization and computes the frequency counts of all the words
         and returns the frequency counts. We use the GPT PRE tokenization regex to
         split into words."""
+        frequency_count: dict[tuple[bytes, ...], int] = {}
         for document in document_list:
-            # print ("Pre tokenizer")
-            # print (document)
             for word in re.finditer(GPT_PRE_TOKENIZER_REGEX, document):
-                if self.str_to_bytes(word.group()) in self._frequency_count:
-                    self._frequency_count[self.str_to_bytes(word.group())] += 1
+                if self.str_to_bytes(word.group()) in frequency_count:
+                    frequency_count[self.str_to_bytes(word.group())] += 1
                 else:
-                    self._frequency_count[self.str_to_bytes(word.group())] = 1
+                    frequency_count[self.str_to_bytes(word.group())] = 1
+        return frequency_count
 
     def update_top_pair_in_frequency_count(self, byte_pair: tuple[bytes, bytes]):
-        """Updates the frequency count and replaces individual bytes with the top pair of bytes
-        For e.g. it will replace (a, n, d): 32 with (b'an', d): 32 if (b'a', b'n') are the byte pair
-        in the last merge."""
+        """
+        This function does two things:
+        1) Updates the frequency count and replaces individual bytes with the top pair of bytes
+            For e.g. it will replace (a, n, d): 32 with (b'an', d): 32 if (b'a', b'n') are the
+            byte pair in the last merge.
+        2) Updates the byte pair count as a consequence of merging the bytes in the words. All
+            the byte pairs that depended on this word will get updated in the @self._pair_count
+            variable.
+        """
+        # First delete this pair from the byte pair frequency counts
+        del self._pair_count[byte_pair]
+        # Then merge this byte pair in the frequency count dictionary.
         new_byte = byte_pair[0] + byte_pair[1]
         for word_byte_tuple, frequency in list(self._frequency_count.items()):
             new_word_byte_tuple: tuple[bytes, ...] = tuple()
+            suffix_intersection_byte_tuple: tuple[bytes, bytes]
+            prefix_intersection_byte_tuple: tuple[bytes, bytes]
             i = 0
             updated = False
             while i < len(word_byte_tuple):
@@ -72,6 +89,32 @@ class BPETokenizer:
                     i += 1
                 elif word_byte_tuple[i] + word_byte_tuple[i + 1] == new_byte:
                     new_word_byte_tuple = new_word_byte_tuple + (word_byte_tuple[i] + word_byte_tuple[i + 1],)
+                    # Update the pair count of the previous pair which had intersection with the
+                    # top_pair For e.g. Let's say the top pair is. (e, st) = 'est'
+                    # (a, e) will be merged with (est) and (a, e) will be reduced it's frequency
+                    # resulting from this word tuple.
+                    if i > 0:
+                        suffix_intersection_byte_tuple = (word_byte_tuple[i - 1], new_byte)
+                        if suffix_intersection_byte_tuple in self._pair_count:
+                            self._pair_count[suffix_intersection_byte_tuple] += frequency
+                        else:
+                            self._pair_count[suffix_intersection_byte_tuple] = frequency
+                        old_prefix_byte_tuple = (word_byte_tuple[i - 1], word_byte_tuple[i])
+                        if old_prefix_byte_tuple in self._pair_count:
+                            self._pair_count[old_prefix_byte_tuple] -= frequency
+                    # Update the pair count of the next pair which had intersection with the top
+                    # pair. For e.g. Let's say the top pair is, (e, st) = 'est'
+                    # (st, f) will be merged with (est) to become (est, f) and (st, f) will be
+                    # reduced it's frequency resulting from this word tuple.
+                    if i + 2 < len(word_byte_tuple):
+                        prefix_intersection_byte_tuple = (new_byte, word_byte_tuple[i + 2])
+                        if prefix_intersection_byte_tuple in self._pair_count:
+                            self._pair_count[prefix_intersection_byte_tuple] += frequency
+                        else:
+                            self._pair_count[prefix_intersection_byte_tuple] = frequency
+                        old_suffix_byte_tuple = (word_byte_tuple[i + 1], word_byte_tuple[i + 2])
+                        if old_suffix_byte_tuple in self._pair_count:
+                            self._pair_count[old_suffix_byte_tuple] -= frequency
                     updated = True
                     i += 2
                 else:
@@ -80,6 +123,25 @@ class BPETokenizer:
             if updated:
                 self._frequency_count[new_word_byte_tuple] = frequency
                 del self._frequency_count[word_byte_tuple]
+        return
+
+    def initialize_pair_count_from_frequency(self):
+        """
+        Initializes the pair of bytes along with their frequency of occurence.
+        This is only done at the beginning. After that we incrementally update this dictionary.
+        """
+        if len(self._pair_count) > 0:
+            # Pair count is already initialized from frequency.
+            return
+        self._pair_count = {}
+        for words, frequency in self._frequency_count.items():
+            # Iterate over pair of bytes
+            for i in range(len(words) - 1):
+                pair = (words[i], words[i + 1])
+                if pair not in self._pair_count:
+                    self._pair_count[pair] = frequency
+                else:
+                    self._pair_count[pair] += frequency
         return
 
     def merge(self):
@@ -92,28 +154,31 @@ class BPETokenizer:
         this function is called, it increases the vocabulary size by 1 and adds a new byte
         pair to the bpe merge list.
         """
-        pair_count: dict[tuple[bytes, bytes], int] = {}
-        for words, frequency in self._frequency_count.items():
-            # Iterate over pair of bytes
-            for i in range(len(words) - 1):
-                pair = (words[i], words[i + 1])
-                if pair not in pair_count:
-                    pair_count[pair] = frequency
-                else:
-                    pair_count[pair] += frequency
+        self.initialize_pair_count_from_frequency()
         # Find the top pair by sorting by the frequency and if the frequency is the same, then
         # sort by the key
-        sorted_pair_count = dict(sorted(pair_count.items(), key=lambda item: (item[1], item[0]), reverse=True))
-        # print ("Sorted pair count")
-        # print (sorted_pair_count)
-        first_key, _ = next(iter(sorted_pair_count.items()))
+        sorted_pair_count = dict(sorted(self._pair_count.items(), 
+                                        key=lambda item: (item[1], item[0]), reverse=True))
+        top_pair, _ = next(iter(sorted_pair_count.items()))
         # Add the top pair to the vocabulary
-        self.add_to_vocabulary(first_key)
+        self.add_to_vocabulary(top_pair)
         # Updates the frequency count and replaces individual bytes with the top pair of bytes
         # For e.g. it will replace (a, n, d): 32 with (b'an', d): 32
-        self.update_top_pair_in_frequency_count(first_key)
-        self._bpe_merges.append(first_key)
+        # This also updates the byte pair frequency with the new appended bytes.
+        self.update_top_pair_in_frequency_count(top_pair)
+        self._bpe_merges.append(top_pair)
         return
+
+    def escaped_special_tokens_regex(self, special_tokens: list[str]) -> str:
+        """
+        Escapes the special tokens and builds a regex merging all of them.
+        """
+        escaped_special_tokens: list[str] = []
+        # Escapes the special token so that regex handles the special characters in the
+        # separator correctly.
+        for token in special_tokens:
+            escaped_special_tokens.append(re.escape(token))
+        return "|".join(escaped_special_tokens)
 
     def tokenize(
         self, tokenizer_training_data_path: str, vocab_size: int, special_tokens: list[str]
@@ -123,18 +188,77 @@ class BPETokenizer:
         by special_tokens. It does pre tokenization, initializes the vocabulary and calls the
         merge algorithm.
         """
-
+        escaped_special_tokens_re = self.escaped_special_tokens_regex(special_tokens)
         self._start_time = time.perf_counter()
         with open(tokenizer_training_data_path, "r", encoding="utf-8") as file:
             content = file.read()
-            escaped_special_tokens = []
-            # Escapes the special token so that regex handles the special characters in the
-            # separator correctly.
-            for token in special_tokens:
-                escaped_special_tokens.append(re.escape(token))
-            document_list = re.split("|".join(escaped_special_tokens), content)
+            document_list = re.split(escaped_special_tokens_re, content)
             # Compute the frequency counts for all the words in the list of documents
-            self.pre_tokenization(document_list)
+            # Update the global frequency count with the frequency computed for this document.
+            self._frequency_count = dict(Counter(self._frequency_count) + Counter(self.pre_tokenization(document_list)))
+            # Initialize the vocabulary of the byte pair encoding algorithm
+            self.create_vocabulary(special_tokens)
+            # Run the merging algorithm.
+            while len(self._vocabulary) < vocab_size:
+                self.merge()
+            self.print_debug_string()
+        self._end_time = time.perf_counter()
+        execution_time = self._end_time - self._start_time
+        print(f"\nExecution time: {execution_time:.6f} seconds\n", flush=True)
+        return (self._vocabulary, self._bpe_merges)
+
+    def parallel_pre_tokenizer(
+        self,
+        file_start_boundary: int,
+        file_end_boundary: int,
+        tokenizer_training_data_path: str,
+        special_tokens_regex: str,
+    ):
+        '''
+            Parallelize the pre tokenizer by reading a chunk of the input file instead of
+            the entire file.
+        '''
+        with open(tokenizer_training_data_path, "rb") as file:
+            file.seek(file_start_boundary)
+            content = file.read(file_end_boundary - file_start_boundary).decode("utf-8", errors="ignore")
+            document_list = re.split(special_tokens_regex, content)
+            return self.pre_tokenization(document_list)
+        return
+
+    def parallel_tokenize(
+        self, tokenizer_training_data_path: str, vocab_size: int, special_tokens: list[str]
+    ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+        """
+        Parallelizes the bpe encoding on the given training dataset, limited by the vocab size
+        and split by special_tokens. It does pre tokenization, initializes the vocabulary and calls
+        the merge algorithm.
+
+        It does the following:
+        1) Splits the input file (training data file) into multiple chunks.
+        2) In parallel process, calls the parallel pretokenize to compute the frequency counts.
+        3) Merge the frequency counts from the parallel processes into a single frequency count 
+            dictionary.
+        """
+        escaped_special_tokens_re = self.escaped_special_tokens_regex(special_tokens)
+        self._start_time = time.perf_counter()
+        with open(tokenizer_training_data_path, "rb") as file:
+            num_processes = 10
+
+            boundaries = find_chunk_boundaries(file, num_processes, b"<|endoftext|>")
+
+            # The following is a serial implementation, but you can parallelize this
+            # by sending each start/end pair to a set of processes.
+            with multiprocessing.Pool(processes=num_processes) as pool:
+                async_result_list = []
+                for start, end in zip(boundaries[:-1], boundaries[1:]):
+                    async_result = pool.apply_async(
+                        self.parallel_pre_tokenizer,
+                        args=(start, end, tokenizer_training_data_path, escaped_special_tokens_re),
+                    )
+                    async_result_list.append(async_result)
+                for async_result in async_result_list:
+                    self._frequency_count = dict(Counter(self._frequency_count) + Counter(async_result.get()))
+
             # Initialize the vocabulary of the byte pair encoding algorithm
             self.create_vocabulary(special_tokens)
             # Run the merging algorithm.
@@ -163,6 +287,3 @@ class BPETokenizer:
         print("Vocabulary size: " + str(len(self._vocabulary)))
         print("Frequency count table: " + str(len(self._frequency_count)))
         return
-        # print ("Vocabulary: \n")
-        # print (self._vocabulary)
-        # print (self._bpe_merges)

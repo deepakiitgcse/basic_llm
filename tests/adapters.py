@@ -591,4 +591,4 @@ def run_train_bpe(
                 Merges are ordered by order of creation.
     """
     bpe_tokenizer = BPETokenizer()
-    return bpe_tokenizer.tokenize(str(input_path), vocab_size, special_tokens)
+    return bpe_tokenizer.parallel_tokenize(str(input_path), vocab_size, special_tokens)
