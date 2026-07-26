@@ -48,3 +48,24 @@ gunzip owt_valid.txt.gz
 cd ..
 ```
 
+### Results of the train_bpe_tinystories.py on TinyStoriesV2-GPT4-valid.txt
+#### Results with a sequential tokenizer
+```
+uv run cs336_basics/train_bpe_tinystories.py
+Vocabulary size: 1000
+Frequency count table: 13111
+
+Execution time: 10.757203 seconds
+```
+
+#### Results with parallel tokenizer which reads the input chunks in parallel
+
+```
+uv run cs336_basics/train_bpe_tinystories.py
+Vocabulary size: 1000
+Frequency count table: 13111
+
+Execution time: 6.366422 seconds
+```
+
+

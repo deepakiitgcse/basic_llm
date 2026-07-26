@@ -1,6 +1,6 @@
-from bpe_tokenizer import BPETokenizer
+'''Module providing functions to import the Path.'''
 from pathlib import Path
-import json
+from bpe_tokenizer import BPETokenizer
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -14,4 +14,3 @@ if __name__ == '__main__':
     merges_path = DATA_DIR / "TinyStoriesV2-GPT4-train-merges.txt"
     tokenizer.materialize_vocab(vocab_path)
     tokenizer.materialize_merges(merges_path)
-    
