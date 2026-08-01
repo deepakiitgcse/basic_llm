@@ -265,7 +265,7 @@ class BPETokenizer:
             self.create_vocabulary(special_tokens)
             # Run the merging algorithm.
             while len(self._vocabulary) < vocab_size:
-                if len(self._vocabulary) % 1000 == 0:
+                if len(self._vocabulary) % 100 == 0:
                     print ("Vocabolary size: " + str(len(self._vocabulary)))
                 self.merge()
             self.print_debug_string()
