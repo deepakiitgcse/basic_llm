@@ -38,6 +38,7 @@ class BPETokenizer:
         for token in special_tokens:
             self._vocabulary[self._token_id] = token.encode("utf-8")
             self._token_id += 1
+        print ("Finished initializing vocabulary")
 
     def add_to_vocabulary(self, byte_pair: tuple[bytes, bytes]):
         """Adds a new byte pair (as a new concatenated byte) to the vocabulary and
@@ -258,11 +259,14 @@ class BPETokenizer:
                     async_result_list.append(async_result)
                 for async_result in async_result_list:
                     self._frequency_count = dict(Counter(self._frequency_count) + Counter(async_result.get()))
+                    print ("Finished pre_tokenizer: " + multiprocessing.current_process().name)
 
             # Initialize the vocabulary of the byte pair encoding algorithm
             self.create_vocabulary(special_tokens)
             # Run the merging algorithm.
             while len(self._vocabulary) < vocab_size:
+                if len(self._vocabulary) % 1000 == 0:
+                    print ("Vocabolary size: " + str(len(self._vocabulary)))
                 self.merge()
             self.print_debug_string()
         self._end_time = time.perf_counter()
