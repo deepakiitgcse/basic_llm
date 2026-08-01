@@ -282,6 +282,31 @@ class BPETokenizer:
             pickle.dump(self._bpe_merges, file)
         print("Merges materialized data: " + str(merges_path))
 
+    def materialize_vocab_as_text(self, vocab_path):
+        """Materializes the vocabulary in a human readable format. Vocabulary is a 
+        dict of token_id to bytes (encoded using utf-8). It will be shown as
+        a list of pairs (token_id, text (decoded using utf-8))
+        """
+        with open(vocab_path, "w", encoding="utf-8") as file:
+            for key, val in self._vocabulary.items():
+                try:
+                    file.write(str(key) + "," + val.decode("utf-8") + "\n")
+                except UnicodeDecodeError:
+                    continue # Skip the bad byte
+        print("Vocab materialized text data: " + str(vocab_path))
+
+    def materialize_merges_as_text(self, merges_path):
+        """Materializes the merges in a human readable format. Every row will be"
+         a pair of text that got merged."""
+        with open(merges_path, "w", encoding="utf-8") as file:
+            for m in self._bpe_merges:
+                try:
+                    file.write(m[0].decode("utf-8") + "," + m[1].decode("utf-8") + "\n")
+                except UnicodeDecodeError:
+                    continue # Skip the bad byte
+        print("Merges materialized text data: " + str(merges_path))
+
+
     def print_debug_string(self):
         """Helper function to print various variables to help with debugging."""
         print("Vocabulary size: " + str(len(self._vocabulary)))
