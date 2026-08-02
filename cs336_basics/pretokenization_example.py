@@ -1,6 +1,34 @@
+"""Import os module for file system operations."""
 import os
 from typing import BinaryIO
 
+
+def find_chunk_boundaries_with_max_chunk_size(
+        file: BinaryIO,
+        split_special_token: bytes,
+        max_chunk_size_bytes: int = int(1e8),) -> list[int]:
+    """
+        Chunk the file into multiple parts with roughly the max_chunk_size_bytes. This is
+        so that we make small but consistent progress in reading moderate chunks of data
+        rather than a single large file. 
+
+        The default max_chunk_size_bytes is 100Mb
+    """
+
+    assert max_chunk_size_bytes > 0, "Max chunk size must be greater than zero. Usually 100MB."
+
+    # Get total file size in bytes
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+
+    # The desired number of chunks are total file size / max_chunk size
+    print ("BPE training file size in MB: " +  str(file_size/1e6))
+    print ("Max chunk size in MB: " + str(max_chunk_size_bytes/1e6))
+    desired_num_chunks = max(file_size // max_chunk_size_bytes, 1)
+    print ("Number of chunks to read: " + str(desired_num_chunks))
+
+    return find_chunk_boundaries(file, desired_num_chunks, split_special_token)
 
 def find_chunk_boundaries(
     file: BinaryIO,

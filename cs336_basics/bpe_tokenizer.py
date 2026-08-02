@@ -4,7 +4,7 @@ import multiprocessing
 import pickle
 import time
 import regex as re
-from cs336_basics.pretokenization_example import find_chunk_boundaries
+from cs336_basics.pretokenization_example import find_chunk_boundaries, find_chunk_boundaries_with_max_chunk_size
 
 GPT_PRE_TOKENIZER_REGEX = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -245,7 +245,7 @@ class BPETokenizer:
         with open(tokenizer_training_data_path, "rb") as file:
             num_processes = 10
 
-            boundaries = find_chunk_boundaries(file, num_processes, b"<|endoftext|>")
+            boundaries = find_chunk_boundaries_with_max_chunk_size(file, b"<|endoftext|>")
 
             # The following is a serial implementation, but you can parallelize this
             # by sending each start/end pair to a set of processes.
