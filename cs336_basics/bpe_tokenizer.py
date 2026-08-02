@@ -249,6 +249,7 @@ class BPETokenizer:
 
             # The following is a serial implementation, but you can parallelize this
             # by sending each start/end pair to a set of processes.
+            chunk_number = 1
             with multiprocessing.Pool(processes=num_processes) as pool:
                 async_result_list = []
                 for start, end in zip(boundaries[:-1], boundaries[1:]):
@@ -259,7 +260,8 @@ class BPETokenizer:
                     async_result_list.append(async_result)
                 for async_result in async_result_list:
                     self._frequency_count = dict(Counter(self._frequency_count) + Counter(async_result.get()))
-                    print ("Finished pre_tokenizer: " + multiprocessing.current_process().name)
+                    print ("Finished pre_tokenizer : " + str(chunk_number) + "/" +  str(len(boundaries)))
+                    chunk_number += 1
 
             # Initialize the vocabulary of the byte pair encoding algorithm
             self.create_vocabulary(special_tokens)
